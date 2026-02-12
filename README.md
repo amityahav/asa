@@ -50,3 +50,7 @@ go test -v ./...
 ```
 
 Tests include: move file between directories (setup + move tx), two concurrent moves where one fails with write-write conflict, compaction and modifier truncation, Get not seeing uncommitted changes, and that a canceled transaction’s modifier is still counted until compaction.
+
+## Inspiration
+
+This implementation was highly inspired by the transaction manager described in US Patent [US 11,113,251 B2](https://patentimages.storage.googleapis.com/da/ec/98/1f2d3450212ddc/US11113251.pdf) (Levy et al., Vast Data Ltd., 2021): objects store conditional entries keyed by transaction state, reads apply only modifiers whose transactions are committed, and no journaling or long-held locks are required.
