@@ -45,22 +45,32 @@ type Transaction[T Cloner[T]] struct {
 type DataEntry[T Cloner[T]] struct {
 	value       T
 	txModifiers []TxModifier[T] // modifiers are ordered by the time of execution
-	activeTx    int64           // the in-progress tx that mutated this entry
+	activeTx    *Transaction[T] // the in-progress tx that mutated this entry
 	mu          sync.RWMutex    // used for concurrent access by transactions
 }
 
-type StorageEngine[T Cloner[T]] struct {
-	store     map[string]*DataEntry[T]
-	txCounter int64 // incremented id for transactions
-	mu        sync.RWMutex
-	logger    *slog.Logger
+type EngineConfig struct {
+	CompactionInterval time.Duration
 }
 
-func NewStorageEngine[T Cloner[T]]() *StorageEngine[T] {
+type StorageEngine[T Cloner[T]] struct {
+	store              map[string]*DataEntry[T]
+	txCounter          int64 // incremented id for transactions
+	mu                 sync.RWMutex
+	logger             *slog.Logger
+	compactionInterval time.Duration
+}
+
+func NewStorageEngine[T Cloner[T]](cfg *EngineConfig) *StorageEngine[T] {
+	interval := 30 * time.Second
+	if cfg != nil && cfg.CompactionInterval > 0 {
+		interval = cfg.CompactionInterval
+	}
 	se := StorageEngine[T]{
-		store:     make(map[string]*DataEntry[T]),
-		txCounter: 0,
-		logger:    slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		store:              make(map[string]*DataEntry[T]),
+		txCounter:          0,
+		logger:             slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		compactionInterval: interval,
 	}
 
 	go se.startCompactionWorker()
@@ -87,8 +97,8 @@ func (e *StorageEngine[T]) put(key string, modifier TxModifier[T]) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	if v.activeTx != modifier.ID() {
-		if modifier.tx.status.Load() == int32(TxInProgress) {
+	if v.activeTx != nil && v.activeTx.id != modifier.ID() {
+		if v.activeTx.status.Load() == int32(TxInProgress) {
 			// There can be only one transaction in progress, and it will always be the last modifier in txModifiers.
 			return fmt.Errorf("write-write conflict detected for key: %s", key)
 		}
@@ -98,7 +108,7 @@ func (e *StorageEngine[T]) put(key string, modifier TxModifier[T]) error {
 		// mutation attempt.
 	}
 
-	v.activeTx = modifier.ID()
+	v.activeTx = modifier.tx
 	v.txModifiers = append(v.txModifiers, modifier)
 
 	return nil
@@ -107,7 +117,7 @@ func (e *StorageEngine[T]) put(key string, modifier TxModifier[T]) error {
 func (e *StorageEngine[T]) startCompactionWorker() {
 	for {
 		select {
-		case <-time.After(30 * time.Second):
+		case <-time.After(e.compactionInterval):
 			e.compact()
 		}
 	}
@@ -250,6 +260,8 @@ func DoTransaction[T Cloner[T]](engine *StorageEngine[T], f func(tx *Transaction
 		tx.Cancel()
 		return err
 	}
+
+	tx.Commit()
 
 	return nil
 }
