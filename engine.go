@@ -141,9 +141,9 @@ func (e *StorageEngine[T]) compact() {
 
 			currentModifiers = append(currentModifiers, modifier)
 		}
+		entry.mu.RUnlock()
 
 		currVal := entry.value.Clone()
-		entry.mu.RUnlock()
 
 		var err error
 		for _, modifier := range currentModifiers {
@@ -206,8 +206,10 @@ func (e *StorageEngine[T]) Get(key string) (T, error) {
 		}
 	}
 
-	currVal := v.value.Clone()
+	currVal := v.value
 	v.mu.RUnlock()
+
+	currVal = currVal.Clone()
 
 	var err error
 	for _, modifier := range modifiers {
